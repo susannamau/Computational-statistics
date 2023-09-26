@@ -1,0 +1,616 @@
+---
+title: "Project work - dati cross section"
+author: "Kevin Capano 844018, Sara Licaj 846892, Susanna Maugeri 839365"
+date: "Esame di Statistica Computazionale del 25 novembre 2020"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+## Importazione dei dati
+
+```{r file}
+file <- read.csv("dataset_finito.csv", sep=",", dec = ".",  
+            stringsAsFactors=TRUE, na.strings=c("NA","NaN", ""))
+```
+
+
+## Presentazione dataset e statistiche descrittive
+
+Il nostro dataset si compone di 39644 osservazioni per 17 variabili.
+
+Ogni osservazione si riferisce ad un articolo di un giornale web, Mashable.
+
+La variabile url è quella identificativa di ogni osservazione.
+
+Le altre variabili sono:
+
+- n_tokens_title: numero di parole nel titolo
+
+- n_tokens_content: numero di parole nell'articolo
+
+- n_unique_tokens: percentuale di parole uniche nell'articolo
+
+- n_non_stop_words: percentuale di non-stop-words nell'articolo
+
+- n_non_stop_unique_tokens: percentuale di parole uniche non-stop-words nell'articolo
+
+- num_hrefs: numero di link
+
+- num_imgs: numero di immagini
+
+- num_videos: numero di video
+
+- average_token_length: lunghezza media delle parole nell'articolo
+
+- num_keywords: numero di keywords nei metadata
+
+- argomento: argomento trattato, è una variabile fattorea 6 livelli
+
+- day: giorno di pubblicazione dell'articolo, è una variabile fattore a 7 livelli
+
+- is_weekend: variabile binaria con 0 se l'articolo è stato pubblicato durante la settimana e 1 se è stato pubblicato durante il weekend
+
+- rate_positive_words: percentuale di parole positive tra i tokens non neutri
+
+- rate_negative_words: percentuale di parole negative tra i tokens non neutri
+
+Queste variabili sono usate per predire la variabile target Shares, che indica il numero di volte che l'articolo che è stato condiviso.
+
+```{r}
+summary(file[,-c(1, 16, 17)])
+table(file[, 16])
+table(file[, 17])
+```
+
+Si nota che nessuna delle variabili presenta valori negativi.
+Per quanto riguarda la variabile target "shares", si nota che i valori sono compresi tra 1 e 843300 e che in media ogni articolo viene condiviso 3395 volte. Si tratta di una distribuzione molto asimmetrica con coda a destra.
+L'argomento e il giorno di pubblicazione più frequenti per gli articoli sono World e il mercoledì.
+
+
+# Missing data
+
+## Conteggio
+
+```{r conteggio}
+sapply(file, function(x)(sum(is.na(x))))
+```
+
+Il primo controllo da effettuare sul nostro modello è la presenza o meno di dati mancanti: l'unica variabile che presenta missing values è "argomento", per un totale di 6134 unità.
+
+Per scrivere più agevolmente le variabili esplicative del modello:
+
+```{r formula}
+formula <- paste(colnames(file), collapse="+")
+formula
+```
+
+```{r modello completo}
+modello_base <- lm(shares ~ n_tokens_title + n_tokens_content + n_unique_tokens +
+                     n_non_stop_words + n_non_stop_unique_tokens + num_hrefs + num_imgs +
+                     num_videos + average_token_length + num_keywords + is_weekend +
+                     rate_positive_words + rate_negative_words + argomento + day, data=file)
+summary(modello_base)
+```
+
+Il modello appena creato è il punto di partenza del percorso di costruzione di un modello robusto, si tratta di una relazione lineare dove "shares" rappresenta la variabile target e la variabile "url" è stata esclusa dall'insieme delle esplicative, in quanto è l'identificativo delle osservazioni. Nell'output del summary si può notare che per la modalità "Sunday" della variabile "Day" non è stato calcolato nessun parametro, inoltre i residui non sono simmetrici intorno al valore nullo e l'indice R^2 è prossimo allo zero. Più della metà delle variabili risultano significative.
+
+
+## Imputazione
+
+Utilizziamo la seguente lista per scrivere rapidamente l'insieme di covariate inserite nel modello, ad eccezione di "url" e "shares":
+
+```{r lista}
+lista <- paste(colnames(file), collapse=",")
+lista
+```
+
+```{r covariate}
+covariate <- file[,c("n_tokens_title", "n_tokens_content", "n_unique_tokens", "n_non_stop_words",
+                     "n_non_stop_unique_tokens", "num_hrefs", "num_imgs", "num_videos",
+                     "average_token_length", "num_keywords", "is_weekend", "rate_positive_words",
+                     "rate_negative_words", "argomento", "day")]
+```
+
+Il modello di partenza include l'unica variabile che presenta dei missing values ("argomento"), di conseguenza è necessaria una procedura di imputazione per sostituire i dati mancanti, al fine di evitare che il modello venga eseguito solamente su un sottoinsieme di osservazioni. In particolare, utilizziamo il pacchetto mice per eseguire una multiple imputation e, poichè la variabile che presenta dati mancanti è categoriale, i missing values verranno imputati tramite un modello logistico.
+
+```{r imputazione}
+library(mice)
+tempData <- mice(covariate, m=1, maxit=20, meth='pmm', seed=500)
+data_imputed <- complete(tempData,1)  
+names(data_imputed)
+sapply(data_imputed, function(x)(sum(is.na(x))))
+```
+
+La procedura di imputazione è stata efficace e tutti i dati mancanti sono stati imputati correttamente.
+
+```{r dati completi}
+dati_completi=cbind(data_imputed, file$shares)
+names(dati_completi)
+names(dati_completi)[16] <- "shares"
+```
+
+```{r covariate giuste}
+covariate_giuste <- dati_completi[,c("n_tokens_title", "n_tokens_content", "n_unique_tokens",
+                                     "n_non_stop_words", "n_non_stop_unique_tokens", "num_hrefs",
+                                     "num_imgs", "num_videos", "average_token_length", "num_keywords",
+                                     "is_weekend", "rate_positive_words", "rate_negative_words",
+                                     "argomento", "day")]
+```
+
+
+## Modello completo su dati completi
+
+```{r modello completo su dati completi}
+modello_base_completo <- lm(shares ~ n_tokens_title + n_tokens_content + n_unique_tokens +
+                              n_non_stop_words + n_non_stop_unique_tokens + num_hrefs +
+                              num_imgs + num_videos + average_token_length + num_keywords +
+                              is_weekend + rate_positive_words + rate_negative_words +
+                              argomento + day, data=dati_completi)
+summary(modello_base_completo)
+```
+
+Per il modello adattato su dati non missing valgono le stesse considerazioni fatta in precedenza.
+
+
+## Diagnostiche dei residui del modello completo
+
+```{r diagnostiche dei residui modello completo}
+par(mfrow=c(2,2)) 
+plot(modello_base_completo)
+par(mfrow=c(1,1))
+resstand <- rstandard(modello_base_completo)
+qqnorm(resstand, xlim=c(-4, 4), ylim=c(-4, 4))
+x <- rnorm(1000)
+qqline(x, col='red')
+```
+
+Dalle diagnostiche dei residui è possibile ipotizzare che lo standard error non sia robusto e che quindi il problema NaN verrà risolto applicando gli Standard Error robusti di White.
+
+Il grafico "Residual vs Fitted" suggerisce che non vi siano pattern non lineari. A prima vista dal "Normal Q-Q" si può pensare che i residui abbiamo un andamento normale ad eccezione della coda di destra, in realtà con un plot più preciso si nota che l'andamento non è assolutamente normale.
+
+Il grafico "Scale Location" mostra che i residui non sono posizionati in modo casuale rispetto ai fitted values, ma che quelli per i valori dei fiddet values tra 2500 e 5000 hanno valori standardizzati più elevati.
+
+Dal grafico "Residual vs Leverage" si nota che vi sono alcune osservazioni che si discostano dal gruppo delle altre per influenza, per esempio la 31038.
+
+
+# Multicollinearità
+
+## Covariate numeriche:
+
+```{r estrazione var numeriche}
+library(plyr)
+library(dplyr)
+file_numeric <- covariate_giuste %>% dplyr::select_if(is.numeric)
+colnames(file_numeric)
+```
+
+Matrice di correlazione tra le covariate:
+
+```{r correlazione}
+require(corrgram)
+corrgram(file_numeric, lower.panel = panel.cor, cex=1, cex.labels = 1)
+```
+
+Le variabili "n_unique_tokens", "n_non_stop_words" e "n_non_stop_unique_tokens" sono perfettamente collineari tra loro, pertanto sarà necessario eliminare almeno una di queste esplicative. La strategia ottimale è quella di rimuovere una covariata per volta, in base al valore degli indici Tol e VIF calcolati di seguito.
+
+```{r Tol e Vif}
+library(mctest)
+imcdiag(modello_base)
+```
+
+Le soglie di riferimento suggeriscono di rimuovere dal modello le variabili con indice Tol minore di 0.3 e VIF maggiore di 5. Il criterio ideale è quello di eliminare inizialmente la variabile con indice Tol inferiore: in questo caso si tratta di "is_weekend", una dummy con modalità 0=weekday-1=weekend, collineare alla variabile "Day".
+
+```{r modello_base1}
+modello_base1 <- lm(shares ~ n_tokens_title + n_tokens_content + n_unique_tokens +
+                      n_non_stop_words + n_non_stop_unique_tokens + num_hrefs +
+                      num_imgs + num_videos + average_token_length + num_keywords +
+                      rate_positive_words + rate_negative_words + argomento + day,
+                    data=dati_completi)
+imcdiag(modello_base1)
+```
+
+La seconda esplicativa che deve essere eliminata è "n_unique_tokens", che presenta un Tol pari a 0.0001, il minore in assoluto.
+
+```{r modello_base2}
+modello_base2 <- lm(shares ~ n_tokens_title + n_tokens_content + n_non_stop_words +
+                      n_non_stop_unique_tokens + num_hrefs + num_imgs + num_videos +
+                      average_token_length + num_keywords + rate_positive_words +
+                      rate_negative_words + argomento + day, data=dati_completi)
+imcdiag(modello_base2)
+```
+
+A questo punto le variabili "n_non_stop_words" e "n_non_stop_unique_tokens" presentano uguali valori di Tol, perciò si decide quale eliminare in base al VIF superiore: la scelta, quindi, ricade su "n_non_stop_words".
+
+```{r modello_base3}
+modello_base3 <- lm(shares ~ n_tokens_title + n_tokens_content + n_non_stop_unique_tokens +
+                      num_hrefs + num_imgs + num_videos + average_token_length +
+                      num_keywords + rate_positive_words + rate_negative_words +
+                      argomento + day, data=dati_completi)
+imcdiag(modello_base3)
+```
+
+Osservando ulteriormente i dati è possibile notare che "rate_positive_words" e "rate_negative_words" sono complemetari a 1, perciò eliminiamo quella con Tol minore. Poichè "rate_positive_words" è correlata positivamente con "average_token_length", ci si aspetta che anche il valore di VIF di questa variabile si normalizzi.
+
+```{r modello_base4}
+modello_base4 <- lm(shares ~ n_tokens_title + n_tokens_content + n_non_stop_unique_tokens +
+                      num_hrefs + num_imgs + num_videos + average_token_length + num_keywords +
+                      rate_negative_words + argomento + day, data=dati_completi)
+imcdiag(modello_base4)
+```
+
+Il modello ottenuto finora sembra sufficientemente accettabile, pertanto è possibile proseguire con gli step successivi.
+
+
+## Covariate fattore:
+
+Verifichiamo l'eventuale presenza di collinearità per le covariate di tipo factor:
+
+```{r estrazione var fattore e chi quadro}
+file_fac <- covariate_giuste %>% dplyr::select_if(is.factor)
+combos <- combn(ncol(file_fac),2)
+adply(combos, 2, function(x) {
+  test <- chisq.test(file_fac[, x[1]], file_fac[, x[2]])
+  tab  <- table(file_fac[, x[1]], file_fac[, x[2]])
+  out <- data.frame("Row" = colnames(file_fac)[x[1]]
+                    , "Column" = colnames(file_fac[x[2]])
+                    , "Chi.Square" = round(test$statistic,3)
+                    , "df"= test$parameter
+                    , "p.value" = round(test$p.value, 3)
+                    , "n" = sum(table(file_fac[,x[1]], file_fac[,x[2]]))
+                    , "u1" =length(unique(file_fac[,x[1]]))-1
+                    , "u2" =length(unique(file_fac[,x[2]]))-1
+                    , "nMinu1u2" =sum(table(file_fac[,x[1]], file_fac[,x[2]]))*
+                      min(length(unique(file_fac[,x[1]]))-1 , length(unique(file_fac[,x[2]]))-1) 
+                    , "Chi.Square norm"  =test$statistic/(sum(table(file_fac[,x[1]], file_fac[,x[2]]))*
+                      min(length(unique(file_fac[,x[1]]))-1 , length(unique(file_fac[,x[2]]))-1)) 
+  )
+  
+  
+  return(out)
+  
+}) 
+```
+
+Il valore del Chi-quadrato normalizzato è 0.00137, essendo molto basso e non superiore a 0.9, si tratta di una quantità che non suggerisce la necessità di eliminare ulteriori covariate dal modello.
+
+
+## Diagnostiche dei residui del modello senza collinearità
+
+```{r diagnostiche dei residui modello_base4}
+par(mfrow=c(2,2)) 
+plot(modello_base4)
+par(mfrow=c(1,1))
+```
+
+```{r plots residui}
+plot(modello_base4$residuals)
+```
+
+```{r max, min e istogramma residui}
+max(modello_base4$residuals)
+min(modello_base4$residuals)
+hist(modello_base4$residuals, breaks=200, xlim=c(-10000, 10000), ylim=c(0, 30000))
+```
+
+Dalle diagnostiche si osserva che i residui sono quasi tutti compresi tra -5000 e 0, inoltre vi sono chiari segni di eteroschedasticità, ovvero la varianza non è costante per tutte le osservazioni.
+Eliminando la collinearità tra le variabili, i plot di diagnostiche non sembrano subire sostanziali miglioramenti.
+
+
+## Test per l'eteroschedasticità del modello senza collinearità
+
+Per confermare l'ipotesi di eteroschedasticità emersa dalle diagnostiche dei residui, applichiamo il test di Breusch-Pagan, ricordando che il rifiuto dell'ipotesi nulla mostra una situazione di non omoschedasticità.
+
+```{r Breusch-Pagan test modello_base4}
+library(lmtest) 
+bptest(modello_base4)
+```
+
+Il risultato del test non fornisce evidenza di eteroschedasticità, tuttavia potrebbero esserci dei punti influenti da eliminare e questo aspetto verrà valutato successivamente. 
+Un altro test utile, oltre che più restrittivo rispetto a Breusch-Pagan, per verificare la presenza di eteroschedasticità è il test di White: ]
+
+```{r}
+library(car)
+ncvTest(modello_base4)
+```
+
+Questa volta l'ipotesi nulla di omoschedasticità viene rifiutata, quindi significa che c'è almeno una variabile che è responsabile di eteroschedasticità. In concordanza con quanto osservato dalle diagnostiche dei residui, si considera maggiormente valido il risultato del test di White e andiamo ad applicare diverse strategie per porre rimedio alla violazione di questo assunto molto importante.
+
+
+# Linearità
+
+## Trasformazione ottimale del target con Box-Cox
+
+```{r Box-Cox}
+library(MASS)
+boxcoxreg1<-boxcox(modello_base4)
+lambda=boxcoxreg1$x[which.max(boxcoxreg1$y)]
+lambda
+```
+
+Il valore di lambda ottenuto è -0.2222222: l'approssimazione migliore è per lambda=0 e ciò corrisponde ad una trasformazione logaritmica della variabile target.
+
+```{r modello_base5}
+options(scipen = 999, digits = 3) 
+modello_base5 <- lm(log(shares+1) ~ n_tokens_title + n_tokens_content + n_non_stop_unique_tokens +
+                      num_hrefs + num_imgs + num_videos + average_token_length + num_keywords +
+                      rate_negative_words + argomento + day, data=dati_completi)
+summary(modello_base5)
+```
+
+Si nota un aumento dell'R^2 rispetto al valore iniziale, anche se rimane ancora molto basso, identificando uno scarso adattamento del modello ai dati. Vi è anche un lieve miglioramento della distribuzione dei residui, che appaiono più simmetrici rispetto a prima.
+
+
+## Trasformazione ottimale delle covariate
+
+```{r gam1}
+library(mgcv)
+gam1 <- gam(log(shares + 1) ~ s(n_tokens_title) + s(n_tokens_content) + 
+    s(n_non_stop_unique_tokens) + s(num_hrefs) + s(num_imgs) + s(num_videos) + 
+    s(average_token_length) + s(num_keywords) + s(rate_negative_words) + 
+    argomento + day, data = dati_completi)
+summary(gam1)
+plot(gam1)
+```
+
+Le variabili "n_tokens_title", "num_keywords" e "num_hrefs" mostrano un andamento lineare, perciò non verranno sostituite da alcuna trasfrormazione.
+
+Le variabili "n_tokens_content", "num_imgs" e "num_videos" mostrano un andamento che ricorda quello sinusoidale nella parte inziale, perciò per semplicità non subiranno alcuna trasformazione.
+
+Per le variabili "n_non_stop_unique_tokens", "average_token_lenght" e "rate_negative_words" viene invece richiesta la trasformazione ottimale.
+
+```{r anova gam1}
+anova.gam(gam1, modello_base5, test="LRT")
+```
+
+Tutte le trasformazioni appaiono significativamente utili, tranne quella per la variabile "n_tokens_title", il cui grafico appare perfettamente lineare.
+
+```{r gam2}
+gam2 <- gam(log(shares + 1) ~ n_tokens_title + n_tokens_content + 
+    s(n_non_stop_unique_tokens) + num_hrefs + num_imgs + num_videos + 
+    s(average_token_length) + num_keywords + s(rate_negative_words) + 
+    argomento + day, data = dati_completi)
+summary(gam2)
+plot(gam2)
+```
+
+```{r modello_base6 con ^2 e ^3}
+modello_base6 <- lm(log(shares+1) ~ n_tokens_title + n_tokens_content + 
+    n_non_stop_unique_tokens + log(num_hrefs+1) + num_imgs + num_videos + 
+    average_token_length + num_keywords + rate_negative_words + 
+    argomento + day + I(num_imgs^2) + I(num_videos^2)
+    + I(num_videos^3)+ I(num_imgs^3) , data = dati_completi)
+summary(modello_base6)
+```
+
+Per le variabili "num_imgs" e "num_videos" sono stati inseriti i termini quadratici e cubici, per riprodurre almeno in parte l'andamento curvilineo che presentano. Alla variabile "num_hrefs", invece, è stata applicata la trasformazione logaritmica.
+
+
+# Model selection
+
+Si applica la procedura di Best Subset per la miglior metrica AIC e poi si eliminano le variabili che non risultano significative.
+
+```{r AIC}
+library(MASS)
+step <- stepAIC(modello_base6, direction="both")
+```
+
+Il modello migliore risulta essere:
+
+```{r modello migliore modello_mod_sel}
+modello_mod_sel <- lm(log(shares+1) ~ n_tokens_content + 
+    n_non_stop_unique_tokens + log(num_hrefs+1) + num_imgs + num_videos + 
+    average_token_length + num_keywords + 
+    argomento + day + I(num_imgs^2) + I(num_videos^2)
+    + I(num_videos^3)+ I(num_imgs^3) , data = dati_completi)
+summary(modello_mod_sel)
+```
+
+Nell'insieme di covariate conservate dal best subset ce n'è una non significativa, che deve essere eliminata: si tratta di "n_non_stop_unique_tokens".
+
+```{r}
+modello_mod_sel <- lm(log(shares+1) ~ n_tokens_content + 
+    log(num_hrefs+1) + num_imgs + num_videos + 
+    average_token_length + num_keywords + 
+    argomento + day + I(num_imgs^2) + I(num_videos^2)
+    + I(num_videos^3)+ I(num_imgs^3) , data = dati_completi)
+summary(modello_mod_sel)
+```
+
+A questo punto tutte le covariate selezionate sono effettivamente significative.
+
+
+# Eliminazione dei punti influenti
+
+```{r influence plot}
+library(car)
+influencePlot(modello_mod_sel, main="Influence Plot",
+              sub="Circle size is proportial to Cook's Distance")
+```
+
+```{r distanza di Cook}
+options(scipen = 999, digits = 6)
+cooksd <- cooks.distance(modello_mod_sel)
+cooksda=data.frame(cooksd)
+summary(cooksd)
+```
+
+```{r cutoff e plot}
+n_used=length(modello_mod_sel$residuals)
+n_used
+nrow(dati_completi)
+# usa tutto
+
+cutoff <- 4/(n_used)
+
+plot(modello_mod_sel, which=4, cook.levels=cutoff)
+abline(h=cutoff, col='red')
+```
+
+Eliminiamo i punti influenti:
+
+```{r eliminazione punti influenti}
+NOinflu=data.frame(dati_completi[cooksd < cutoff, ])
+```
+
+NOinflu corrisponde a dati_completi senza i punti influenti.
+
+Fit del modello migliore sui punti non influenti:
+
+```{r fit del modello migliore ai dati non influenti}
+modello_mod_sel2 <- lm(log(shares+1) ~ n_tokens_content +
+    log(num_hrefs+1) + num_imgs + num_videos + 
+    average_token_length + num_keywords + 
+    argomento + day + I(num_imgs^2) + I(num_videos^2)
+    + I(num_videos^3)+ I(num_imgs^3) , data = NOinflu)
+summary(modello_mod_sel)
+```
+
+
+## Diagnostiche dei residui del modello dopo le best trasformation per le variabili e l'esclusione dei punti influenti
+
+```{r diagnostiche dei residui modello_mod_sel2}
+par(mfrow=c(2,2)) 
+plot(modello_mod_sel2)
+par(mfrow=c(1,1)) 
+```
+
+Osserviamo che la LOESS stimata nel grafico tra residui vs fitted values è sostanzialmente orizzontale, a indicare che l'eliminazione dei punti influenti migliora la relazione lineare del modello; sempre nello stesso grafico si osserva, tuttavia, che la variabilità dei residui diminuisce all'aumentare dei valori fittati dal modello: probabilmente non resta che applicare gli standard error di White per tutelare l'inferenza. Infine nel qq-plot si nota un sensibile miglioramento della normalità dei residui a seguito del cut-off dei punti influenti.
+
+
+# Eteroschedasticità
+
+## Test per l'eteroschedasticità dopo l'esclusione dei punti influenti
+
+```{r Breusch-Pagan test modello_mod_sel2}
+bptest(modello_mod_sel2)
+```
+
+Nonostante l'eliminazione dei valori influenti, il test di Breusch-Pagan mostra la persistenza di eteroschedasticità. L'unico rimedio rimasto è applicare la correzione di White per gli Standard Error.
+
+
+## Standard errors robusti di White
+
+Osserviamo che il problema dell'eteroschedasticità non si risolve con l'eliminazione dei punti influenti, perciò procediamo con la correzione di White per gli standard errors.
+
+```{r stardard error di White}
+library(sandwich)
+library(lmtest)
+coeftest(modello_mod_sel2, vcov = vcovHC(modello_mod_sel2))
+library(lmSupport)
+modelCorrectSE(modello_mod_sel2)
+```
+
+```{r Breusch-Pagan test modello}
+bptest(modello_mod_sel2)
+```
+
+L'esito del test di Breusch-Pagan rimane invariato, in quanto gli Standard Error di White non eliminano l'eteroschedasticità, ma ne tengono conto per correggere le stime degli Standard Error dei coefficienti OLS.
+
+
+# Bootstrap
+
+```{r estrazione 1999 campioni}
+library(car)
+boot_model <- Boot(modello_mod_sel2, R=1999)
+```
+
+Osservando la distanza tra il parametro stimato con MLE e il parametro stimato con BootStrap (bootBias), si nota che questa quantità è molto piccola per ogni coefficiente stimato.
+
+```{r summary}
+summary(boot_model, high.moments=T)
+```
+
+```{r empirical boot IC}
+Confint(boot_model, level=c(0.95), type="perc")
+```
+
+```{r istogrammi}
+hist(boot_model, ask=T, legend="separate")
+```
+
+Confronto con le stime OLS:
+
+```{r summary modello finale}
+summary(modello_mod_sel2)
+```
+
+La linea tratteggiata rappresenta la stima del parametro MLE.
+Poichè le linee tratteggiate di tutte le variabili cadono all'interno dell'intervallo di confidenza Bootstrap, risulta che tutte le stime MSE siano robuste.
+
+Se l'intervallo di confidenza Bootstrap (corrispondente alla riga nera marcata in basso) comprende lo zero, il parametro risulta non significativo, mentre se non lo comprende risulta significativo.
+
+Le stime Bootstrap e i loro intervalli di confidenza confermano quanto osservato per le stime OLS del modello: i parametri sono tutti significativi ad eccezione di "argomento_lifestyle" e "n_non_stop_unique_tokens", poichè i loro intervalli di confidenza comprendono il valore nullo. Per "day_monday" e "n_tokens_content", per le quali la signficatività era bassa, si osserva che l'intervallo di confidenza Bootstrap non comprende lo zero, tuttavia ci si avvicina molto.
+
+Per le variabili "num_imgs^2", "num_imgs^3", "num_videos^2" e "num_videos^3" invece si nota che, nonostante la stima MLE risulti molto significativa, l'intervallo di confidenza si avvicina molto al valore nullo (ma bisogna considerare che i loro parametri sono molto bassi e vicini a zero e che l'intervallo di confidenza si definisce intorno a quei valori).
+
+
+# Confronto finale
+
+## Confronto dei coefficienti del modello iniziale e di quello robusto
+
+```{r}
+library(coefplot)
+coefplot(modello_base_completo, intercept=FALSE, decreasing = TRUE, sort = "magnitude")
+coefplot(modello_mod_sel2, intercept=FALSE, decreasing = TRUE, sort = "magnitude")
+```
+
+I coefficienti del modello robusto finale appaiono migliori di quelli del modello completo iniziale, in quanto una maggior quota di essi è significativa.
+
+```{r}
+library(forestmodel)
+print(forest_model(modello_mod_sel2))
+```
+
+
+## Confronto delle diagnostiche iniziali e finali
+
+```{r}
+par(mfrow=c(2,2))
+plot(modello_base_completo)
+plot(modello_mod_sel2)
+par(mfrow=c(1,1))
+```
+
+Si osserva un miglioramento delle diagnostiche finale rispetto a quelle di partenza. In particolare, nel plot "Residual vs Fitted" i residui appaiono più simmetrici e casuali intorno alla loro media 0; inoltre, la LOESS appare orizzontale. Il Q-Q plot mostra che i residui si distribuiscono maggiormente in maniera Normale. Dal plot "Scale-Location" si potrebbe intuire la persistenza dell'eteroschedasticità, in quanto i residui mostrano la tipica forma ad imbuto. Nel plot "Residual vs Leverage", invece, si nota che non vi sono più osservazioni oltre i limiti di influenza.
+
+
+## Confronto dei plot y osservati vs y stimati per i modelli ottenuti in ciascuno step
+
+```{r plot y oss x y stimate per ogni passaggio}
+plot(dati_completi$shares, modello_base_completo$fitted.values,
+     main="Modello completo iniziale su dati completi, R2*=0.00653",
+     xlab="log di Shares", ylab="Predicted log di Shares")
+abline(0,1, col='red')
+plot(log((dati_completi$shares)+1), modello_base5$fitted.values,
+     main="Modello dopo Box-Cox, R2*=0.05882",
+     xlab="log di Shares", ylab="Predicted log di Shares")
+abline(0,1, col='red')
+plot(log((dati_completi$shares)+1), modello_base6$fitted.values,
+     main="Modello dopo linearizzazione covariate, R2*=0.06501",
+     xlab="log di Shares", ylab="Predicted log di Shares")
+abline(0,1, col='red')
+plot(log((dati_completi$shares)+1), modello_mod_sel$fitted.values,
+     main="Modello dopo model selection, R2*=0.06505",
+     xlab="log di Shares", ylab="Predicted log di Shares")
+abline(0,1, col='red')
+plot(log((NOinflu$shares)+1), modello_mod_sel2$fitted.values,
+     main="Modello finale dopo eliminazione dei punti influenti, R2*=0.08445",
+     xlab="log di Shares", ylab="Predicted log di Shares")
+abline(0,1, col='red')
+```
+
+Il modello di partenza descrive molto male i dati, come conferma anche l'indice R^2, e si nota la presenza di diversi punti che si allontanano dalla nuvola in cui si concentrano i dati.
+
+Dopo la trasformazione della variabile target attraverso la procedura di Box e Cox, la distribuzione dei punti migliora notevolmente e appare casuale intorno alla bisettrice del quadrante.
+
+Dopo il processo di linearizzazione delle covariate e la model selection, la nuvola di osservazioni si compatta ulteriormente anche se non sembra distribuirsi lungo la bisettrice.
+
+Il modello finale, dopo l'eliminazione dei punti influenti, mostra il miglioramento maggiore rispetto a tutti gli altri passaggi. Con l'esclusione di questi punti problematici, i parametri del modello non subiscono più la loro influenza e quindi si specializzano sui dati rimanenti. Questo grafico non mostra un adattamento perfetto, tuttavia è un risultato coerente col fatto che il modello analizzato soffra ancora di eteroschedasticità. Nonostante complessivamente l'adattamento del modello sia aumentato di oltre 10 volte, rimane scarso.
+
+
+
+
+

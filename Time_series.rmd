@@ -1,0 +1,332 @@
+---
+title: "Project work - serie storica"
+author: "Kevin Capano 844018, Sara Licaj 846892, Susanna Maugeri 839365"
+date: "Esame di Statistica Computazionale del 25 novembre 2020"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+La serie storica analizzata fa riferimento alla produzione mensile di birra in Austria, di cui sono stati raccolti i dati per il periodo che va da gennaio del 1956 ad agosto del 1995. 
+
+# Importazione dei dati e plot
+
+```{r}
+beer <- read.csv("beer.csv", header = TRUE, as.is = TRUE)
+beerts <- ts(beer$Monthly.beer.production, start=(1956), frequency=12)
+plot.ts(beerts)
+```
+
+La serie ha un andamento chiaramente stagionale e occorre stabilizzare la varianza che aumenta nel tempo. Inoltre, si osserva la presenza di un leggero trend crescente.
+
+
+# Stabilizzazione della varianza
+
+```{r}
+logbeer <- log(beerts)
+plot.ts(logbeer)
+```
+
+Applicando una trasformazione logaritmica alla serie la varianza si stabilizza e non aumenta nel tempo.
+
+
+# Acf e pacf
+
+```{r}
+library(astsa)
+acf2(logbeer,48)
+```
+
+Dall'ACF rileviamo la stagionalità di ordine 12.
+I lag sui numeri interi sono annuali, si riferiscono alla correlazione della serie con la serie stessa 12, 24, 36 mesi prima, cioè per la sua componente stagionale.
+Gli spike presenti prima del primo valore unitario, invece, sono la struttura di autocorrelazione della serie nella sua componente non stagionale.
+
+
+ACF:
+
+- Seasonal: potrebbe essere MA(1) o MA(2) o MA(3) o superiore, poichè si osserva una correlazione molto forte anche dopo diversi anni;
+
+- Non seasonal: potrebbe essere MA(1) o MA(2) o MA(3) o superiore, anche in questo caso vi è una correlazione molto forte.
+
+Il grafico suggerisce che la stagionalità è molto forte.
+Potrebbe essere un modello arima stagionale.
+
+
+PACF:
+
+- Seasonal: potrebbe essere AR(1) o AR(2);
+
+- Non seasonal: anche in questo caso potrebbe essere AR(1) o AR(2).
+
+
+Si osservano correlazioni significative per la serie con 1 e 2 mesi prima.
+Questo suggerisce una struttura ARMA o ARIMA nella componente non stagionale.
+
+
+Il modello potrebbe essere:
+ARIMA(2,0,3)(2,1,3)[12] o inferiore a causa dell'over-specification.
+
+
+# Intuizione del trend, grafico delle medie mensili negli anni, trend medio
+
+```{r}
+flowm = matrix(logbeer, ncol=12, byrow=TRUE)
+col.means=apply(flowm,2,mean)
+plot(col.means, type="b", main="Medie per ogni mese", xlab="Month", ylab="Mean")
+```
+
+Nonostante non sia un'analisi molto fine, si può osservare che mediamente si produce più birra nei mesi invernali. In particolare, si nota un incremento nella produzione di birra in corrispondenza dell'Oktoberfest.
+
+
+# Rimozione della stagionalità
+
+Quante differenze di ordine 12 occorre effettuare per ottenere una serie libera dalla componente stagionale?
+
+```{r}
+library(forecast)
+nsdiffs(logbeer)
+```
+
+Una sola.
+
+```{r}
+diff12 = diff(logbeer, 12)
+plot.ts(diff12)
+abline(h=mean(diff12), col='red')
+```
+
+Dopo aver differenziato la serie appare più stazionaria, è opportuno chiedersi se sia seasonal stationary.
+
+```{r}
+nsdiffs(diff12)
+```
+
+Abbiamo rimosso la non stazionarietà dovuta alla componente stagionale, ovvero è seasonal stationary, tuttavia vi potrebbe essere un'altra fonte di non stazionarietà da rilevare; perciò verifichiamo che la serie risulti stazionaria.
+
+```{r}
+ndiffs(diff12)
+```
+
+La serie non è stazionaria, quindi vi è un'altra fonte di non stazionarietà che potrebbe essere un trend deterministico o una radice unitaria.
+
+```{r}
+acf2(diff12,48)
+```
+
+ACF:
+
+- Seasonal: potrebbe essere MA(1), poichè si osserva uno spike al primo lag; 
+
+- Non seasonal: si osserva un'alternanza di spike significativi e non, perciò consideriamo nonseasoal MA(5) o inferiore. 
+
+
+PACF:
+
+- Seasonal: si osservano 4 spikes, uno per ogni valore unitario. Potrebbe essere un
+AR(4) o inferiore per overspecification;
+
+- Non seasonal: si osserva un'alternanza di spike significativi e non per i primi valori: consideriamo nonseasoal AR(5) o inferiore.
+
+I residui della componente stagionale potrebbero avere una struttura ARMA(4,1) oppure inferiore. La componente non stagionale,invece, potrebbe avere una struttura ARIMA(5,1,5) o inferiore.
+
+
+Il modello verosimile per la serie originale potrebbe essere (5,1,5)(4,1,1)[12] o una struttura con ordini inferiori, a causa dell'over specification.
+
+```{r auto.arima grezza su diff12}
+library(urca)
+auto.arima(diff12)
+```
+
+La funzione auto.arima consiglia una struttura ARIMA(3,1,3)(2,0,1)[12] with drift per la serie differenziata per la stagionalità, dunque una struttura ARIMA(3,1,3)(2,1,1)[12] col drift per la serie originale.
+
+
+# Controllo della stazionarietà
+
+Vengono applicati i test ADF e KPSS per capire, con il primo, se c'è una radice unitaria e con il secondo se c'è un trend stazionario o stocastico.
+
+```{r}
+mean(diff12)
+```
+
+Anche se la media è prossima a zero, la si considera diversa da zero per il test di stazionarietà.
+
+
+Per il test ADF le ipotesi sono le seguenti:
+
+H0: presenza di una radice unitaria
+
+H1: assenza di radici unitarie
+
+```{r}
+summary(ur.df(diff12, "trend", lags=12))
+```
+
+Il risultato del test non mostra la presenza di radici unitarie, nonostante la serie non sia stazionaria. Data questa evidenza si tratta dunque di una serie stazionaria attorno ad un trend deterministico. Anche l'intercetta ed il trend sono significativamente e congiuntamente diversi da 0.
+
+
+Per il test KPSS le ipotesi sono le seguenti:
+
+H0: variabile stazionaria 
+
+H1: variabile trend stazionaria (per type = "tau")
+
+```{r}
+ndiffs(diff12)
+```
+ 
+```{r}
+kpss.test=ur.kpss(diff12, type = "tau")
+summary(kpss.test)
+```
+ 
+Poichè l'ipotesi nulla viene rifiutata, si ha la conferma che la serie sia trend stazionaria e che il trend sia deterministico.
+
+
+# Che tipo di trend deterministico è?
+
+Verifichiamo se il trend è lineare, quadratico o cubico:
+
+```{r}
+trend = seq(1:length(diff12))
+trend2 <- trend*trend
+trend3 <- trend*trend*trend
+ttt <- cbind(trend, trend2, trend3)
+auto.arima(diff12, xreg=ttt)
+```
+
+Il trend è lineare, poichè il termine quadratico e quello cubico non vengono rilevati.
+
+
+# Auto.arima con l'aggiunta del trend lineare
+
+Auto.arima sul modello originale:
+
+```{r}
+library(forecast)
+trend = seq(1:length(logbeer))
+modello <- auto.arima(logbeer, xreg=trend, seasonal = TRUE)
+summary(modello)
+```
+
+L'auto.arima sul modello originale non rileva che la stagionalità sia fonte di non stazionarietà.
+Consiglia la struttura ARIMA(1,0,1)(0,0,2)[12] per i residui attorno al trend deterministico.
+
+Questo è il primo dei due modelli competitivi.
+
+
+Auto.arima sul modello differenziato:
+
+```{r auto.arma su diff12 col trend}
+trend = seq(1:length(diff12))
+modello <- auto.arima(diff12, xreg=trend)
+summary(modello)
+```
+
+L'auto.arima su diff12 consiglia una struttura ARIMA(2,0,2)(0,0,1)[12] per i residui attorno al trend deterministico, questo, secondo la nostra ipotesi, è il modello per la serie destagionalizzata e detrendizzata.
+
+Questo è il secondo dei due modelli competitivi e il suo trend è 0.0404-0.0001t.
+
+
+I due modelli competitivi sono:
+
+Auto.arima:           Regression with ARIMA(1,0,1)(0,1,2)[12] errors
+
+Procedura standard:   Regression with ARIMA(2,0,2)(0,1,1)[12] errors
+
+```{r}
+library(astsa)
+sarima(logbeer, 1,0,1,0,1,2,12)
+sarima(logbeer, 2,0,2,0,1,1,12)
+```
+
+Il secondo modello sembra migliore per il BIC, ma i p-value di Ljung-Box sono tutti significativi. Questo significa che gli errori sono tra loro correlati e probabilmente vi è qualche errore di specificazione del modello.
+
+
+# Detrendizzazione della serie
+
+logbeer: serie originale
+
+diff12: serie destagionalizzata
+
+trend deterministico di diff12: 0.0404 - 0.0001t
+
+diff12 = 0.0404 - 0.0001t + vt
+
+diff12 - 0.0404 + 0.0001t = vt, serie detrendizzata
+
+Occorre capire la struttura ARMA di vt.
+
+
+Si definisce la serie detrendizzata e se ne chiede la struttura ARMA:
+
+```{r}
+trend = seq(1:length(diff12))
+notrend <- diff12 - 0.0404 + 0.0001*trend
+plot.ts(notrend)
+abline(h=mean(notrend), col='red')
+ndiffs(notrend)
+```
+
+Notrend è la serie destagionalizzata e detrendizzata, come atteso è stazionaria intorno al valore 0.
+
+```{r}
+fit2 <- auto.arima(notrend)
+summary(fit2)
+```
+
+L'auto.arima su notrend consiglia una struttura ARIMA(2,0,2)(2,0,2)[12] with zero mean.
+
+```{r}
+sarima(notrend, 2,0,2,2,0,2,12)
+```
+
+Nonostante la struttura (2,0,2)(2,0,2)[12] per la serie detrendizzata sia consigliata da auto.arima, la funzione sarima mostra che i p-value rimangono significativi.
+
+Purtroppo i test non coincidono e non si può fare niente di più.
+
+
+*"None of the models considered here pass all of the residual tests. In practise, we would normally use the best model we could find, even if it did not pass all of the tests."* (otexts.com/fpp3/seasonal-arima.html)
+
+
+# Confronto tra auto.arima su serie destagionalizzata e auto.arima su serie anche detrendizzata
+
+Il BIC per il modello trovato con auto.arima sulla serie solo destagionalizzata è -1126.5, mentre quello per il modello trovato dall'auto.arima per la serie anche detrendizzata è -1136.41.
+
+Dunque il secondo modello risulta migliore, avendo un BIC inferiore.
+
+
+# Plot di osservati e stimati
+
+```{r}
+model <- Arima(logbeer, order=c(2,0,2), 
+            seasonal=list(order=c(2, 1, 2), period=12), include.drift = TRUE)
+model
+plot(model$x, col='red')
+lines(fitted(model), col='blue')
+```
+
+Nonostante il test per l'autocorrelazione dei residui di Ljung-Box non dia risultati confortanti, il modello sembra fittare molto bene i dati.
+
+
+# Forecast
+
+Si considerano i tre anni successivi all'ultima osservazione.
+
+```{r}
+sarima.for(logbeer, 36, 2,0,2,2,1,2,12, no.constant=FALSE)
+```
+
+La parte in rosso mostra le previsioni per il triennio succesivo all'ultima osservazione, con i relativi intervalli di confidenza che diventano più ampi al passare del tempo.
+
+
+# Riassunto degli step fondamentali
+
+```{r}
+library(dplyr)
+cbind("Beer" = beerts, "Logs" = logbeer, "d12logs" = diff12, "fitted model"=fitted(model), "residual"=logbeer-fitted(model))  %>%
+  autoplot(facets=TRUE)
+```
+
+Beer è la serie osservata originale, Logs è la sua trasformazione logaritmica e d12logs è la serie differenziata di ordine 12; si nota che con questo tipo di differenziazione si perde il primo anno di osservazioni. Fitted model è l'ipotesi di modello a cui si giunge tramite le varie analisi, mentre residual è la differenza tra il modello originale e quello fittato.
+
+Nel complesso, nei vari passaggi si osserva un graduale miglioramento.
